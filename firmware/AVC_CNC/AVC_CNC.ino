@@ -2,7 +2,7 @@
  Name:		AVC_CNC.ino
  Created:	4/13/2021 7:38:23 PM
  Author:	Kalil (Atualização 2021)
-v2.0 - Add Modo Auto Ref
+v2.0 - Add Modo Auto Ref, e add novos sons (inc, dec,..)
 TODO v2.1 - Save data eeprom
 */
 
@@ -46,7 +46,6 @@ byte   byte_recebido_parte2;        //a segunda parte são os decimais
 int   dados_recebidos_da_fonte[5];  //recebe os 4 bytes da fonte
 byte  compensacao;                  //informa se a compensação esta ativa ou não
 byte  faixa_tensao_lida;            //alerta que a tensão da fonte esta fora da faixa informada como min e max
-byte  estado_comunicacao;           //se 1 a comunicacao esta ok, se 0 esta com erro.
 int   base_tempo1_buzzer;           //base de tempo para o buzzer
 int   base_tempo2_buzzer;           //2ª base de tempo para o buzzer
 int   base_tempo1_led;              //base de tempo para o led
@@ -61,15 +60,17 @@ enum ModoOperacao
 };
 ModoOperacao  modoOperacao = AutoRef;	//modo de operação em referência de tensão ou referência automática
 
+enum StatusBuzzer
+{
+	SemAlarme, Alarme1, Alarme2, Inc, Dec, Enter, Volta
+};
+StatusBuzzer alarmeAtual = SemAlarme;
 
-//     DEFINIÇÕES DO SISTEMA
-#define OK                  true
-#define ERRO                false
-#define ON                  1
-#define OFF                 0
-#define SEM_ALERTA          1
-#define ALERTA1             2 
-#define ALERTA2             3
+enum StatusLeitura
+{
+	Erro = 0, Ok
+};
+StatusLeitura  estadoComunicacao = Erro;           //se 1 a comunicacao esta ok, se 0 esta com erro.
 
 
 //    DEFINIÇÕES DE PARÂMETROS 
@@ -90,10 +91,10 @@ ModoOperacao  modoOperacao = AutoRef;	//modo de operação em referência de tensão
 void leituras(void);
 void acionamentos(void);
 void ihm(void);
-void alertaBuzzer(int qualAlerta);
-void alertaLed(int qualAlerta);
+void alarmeBuzzer();
+void alertaLed(int statusAlerta);
 void shieldLCD(void);
-bool verificaDadosDaLeitura(float valorLido);
+int verificaDadosDaLeitura(float valorLido);
 
 
 //      OUTROS
@@ -159,7 +160,7 @@ void leituras(void) {
 		byte_da_vez = 0;                                                                  //prepara a variável para a lógica seguinte
 		if (tentativas_sem_sucesso++ >= 20) {
 			tentativas_sem_sucesso = 20;
-			estado_comunicacao = ERRO;
+			estadoComunicacao = Erro;
 			char resetCom[] = { 0xFF,0xFF,0xFF,0xFF };
 			Serial.write(resetCom);
 			Serial2.println("erro");
@@ -193,12 +194,12 @@ void leituras(void) {
 			tensao_da_fonte = static_cast<float>(temp);// ((byte_recebido_parte1)+(byte_recebido_parte2 * 256));                 //junta o 3º e 4º byte, como 100 e 10 = 100,10
 			tensao_da_fonte = tensao_da_fonte / 10.0;                                                 //aqui tem o valor recebido de tensão da fonte
 			Serial2.println(tensao_da_fonte);                                                   //aqui tem o valor recebido de tensão da fonte
-			estado_comunicacao = verificaDadosDaLeitura(tensao_da_fonte);   //retorna 1(ok), caso a leitura esteja dentro da faixa pré-estabelecida
+			estadoComunicacao = verificaDadosDaLeitura(tensao_da_fonte) ? Ok : Erro;   //retorna 1(ok), caso a leitura esteja dentro da faixa pré-estabelecida
 			byte_da_vez++;
 			break;
 		default:
-		//	Serial.flush();
-		//	byte_da_vez = 0;
+			//	Serial.flush();
+			//	byte_da_vez = 0;
 			break;
 		}
 	}
@@ -214,7 +215,7 @@ void leituras(void) {
  *
  */
 void acionamentos(void) {
-	if (estado_comunicacao == OK) {                                                        //a compensação é ativa a cada leitura correta da tensão
+	if (estadoComunicacao == Ok) {                                                        //a compensação é ativa a cada leitura correta da tensão
 		if (tensao_da_fonte > (param_Setpoint + param_Histerese)) {                 //então verifica se precisa compensar
 			digitalWrite(MENOS_PIN, HIGH);
 			digitalWrite(MAIS_PIN, LOW);
@@ -244,17 +245,15 @@ void acionamentos(void) {
  *
  *
  */
-void ihm(void) {
-	if (estado_comunicacao == OK) {
-		alertaBuzzer(OK);
-		alertaLed(OK);
-		shieldLCD();
-	}
-	else {
-		alertaBuzzer(ALERTA2);
-		alertaLed(ALERTA2);
-		shieldLCD();
-	}
+void ihm() {
+	static auto estadoAnt = -1;
+	if (estadoComunicacao != estadoAnt)
+		alarmeAtual = estadoComunicacao == Ok ? SemAlarme : Alarme2;
+	estadoAnt = estadoComunicacao;
+	alarmeBuzzer();
+	alertaLed(estadoComunicacao);
+	shieldLCD();
+
 }
 
 
@@ -278,52 +277,70 @@ int buzzer_ja_esta_ligado;
 int temporaria_1_alertaBuzzer;
 int temporaria_2_alertaBuzzer;
 
-void alertaBuzzer(int qualAlerta) {
-	///return;
-	switch (qualAlerta) {
-	case SEM_ALERTA:
+void alarmeBuzzer() {
+	//return;
+	switch (alarmeAtual) {
+	case SemAlarme:
 		noTone(BUZZER_PIN);
 		alerta_sem_erro = 1;
 		temporaria_1_alertaBuzzer = 0;
-
-
-		/* if(temporaria_2_alertaBuzzer++ == 2){
-		   tone(buzzerPin, 329);
-		 }else if(temporaria_2_alertaBuzzer == 1000){
-		   noTone(buzzerPin);
-		 }else if(temporaria_2_alertaBuzzer == 1500){
-		   tone(buzzerPin, 329);
-		 }else if(temporaria_2_alertaBuzzer == 2000){
-		   noTone(buzzerPin);
-		 }else if(temporaria_2_alertaBuzzer >= 4500){
-		   temporaria_2_alertaBuzzer = 4501;
-		 }
-		 */
 		break;
 
-	case ALERTA1:
-
+	case Inc:
+		if (temporaria_1_alertaBuzzer++ == 1)
+			tone(BUZZER_PIN, 1131.2);
+		else if (temporaria_1_alertaBuzzer >= 3)
+			alarmeAtual = SemAlarme;
 		break;
 
-	case ALERTA2:
-		// temporaria_2_alertaBuzzer = 0;
-		if (temporaria_1_alertaBuzzer++ == 1) {
+	case Dec: 
+		if (temporaria_1_alertaBuzzer++ == 1)
 			tone(BUZZER_PIN, 30.8);
-		}
-		else if (temporaria_1_alertaBuzzer == 9) {
+		else if (temporaria_1_alertaBuzzer >= 3)
+			alarmeAtual = SemAlarme;
+		break;
+
+	case Enter:
+		if (temporaria_1_alertaBuzzer++ == 1)
+			tone(BUZZER_PIN, 416.6);
+		else if (temporaria_1_alertaBuzzer == 5)
 			noTone(BUZZER_PIN);
-		}
-		else if (temporaria_1_alertaBuzzer == 15) {
+		else if (temporaria_1_alertaBuzzer == 10)
+			tone(BUZZER_PIN, 1131.2);
+		else if (temporaria_1_alertaBuzzer > 20)
+			alarmeAtual = SemAlarme;
+		break;
+
+	case Volta:
+		if (temporaria_1_alertaBuzzer++ == 1)
+			tone(BUZZER_PIN, 1131.2);
+		else if (temporaria_1_alertaBuzzer == 10)
+			noTone(BUZZER_PIN);
+		else if (temporaria_1_alertaBuzzer == 15)
+			tone(BUZZER_PIN, 416.6);
+		else if (temporaria_1_alertaBuzzer > 20)
+			alarmeAtual = SemAlarme;
+		break;
+
+	case Alarme1:
+
+		break;
+
+	case Alarme2:
+		// temporaria_2_alertaBuzzer = 0;
+		if (temporaria_1_alertaBuzzer++ == 1)
+			tone(BUZZER_PIN, 30.8);
+		else if (temporaria_1_alertaBuzzer == 9)
+			noTone(BUZZER_PIN);
+		else if (temporaria_1_alertaBuzzer == 15)
 			tone(BUZZER_PIN, 1131.2);//392
-		}
-		else if (temporaria_1_alertaBuzzer == 45) {
+		else if (temporaria_1_alertaBuzzer == 45)
 			noTone(BUZZER_PIN);
-		}
-		else if (temporaria_1_alertaBuzzer > 45) {
-			temporaria_1_alertaBuzzer = 46;
-		}
+		else if (temporaria_1_alertaBuzzer > 45)
+			alarmeAtual = SemAlarme;
 		delay(1);
 		break;
+	default:;
 	}
 }
 
@@ -339,18 +356,15 @@ void alertaBuzzer(int qualAlerta) {
 #define LED_AMARELO_DESLIGADO     digitalWrite(LEDAMARELO_PIN,LOW)
 #define LED_VERMELHO_DESLIGADO    digitalWrite(LEDVERMELHO_PIN,LOW)
 
-void alertaLed(int qualAlerta) {
-	switch (qualAlerta) {
-	case OK:
+void alertaLed(const int statusAlerta) {
+	switch (statusAlerta) {
+	case Ok:
 		LED_VERDE_LIGADO;
 		LED_AMARELO_DESLIGADO;
 		LED_VERMELHO_DESLIGADO;
 		break;
 
-	case ALERTA1:
-		break;
-
-	case ALERTA2:
+	case Erro:
 		if (base_tempo1_led == 0) {
 			base_tempo1_led = 10;
 		}
@@ -364,6 +378,8 @@ void alertaLed(int qualAlerta) {
 			LED_AMARELO_DESLIGADO;
 			LED_VERMELHO_DESLIGADO;
 		}
+		break;
+	default:
 		break;
 	}
 }
@@ -417,7 +433,6 @@ int checaBotao() // Identifica o botão pressionado
 		if (temporaria_2_shieldLCD++ >= tempo_botao_pressionado) {
 			temporaria_2_shieldLCD = 0;
 			botaoPressionado = BOTAO_CIMA;
-
 			if (tempo_botao_pressionado-- < 1)
 				tempo_botao_pressionado = 0;
 		}
@@ -430,7 +445,6 @@ int checaBotao() // Identifica o botão pressionado
 		if (temporaria_3_shieldLCD++ >= tempo_botao_pressionado) {
 			temporaria_3_shieldLCD = 0;
 			botaoPressionado = BOTAO_BAIXO;
-
 			if (tempo_botao_pressionado-- < 1)
 				tempo_botao_pressionado = 0;
 		}
@@ -487,6 +501,7 @@ void shieldLCD() {
 	switch (checaBotao()) {
 	case BOTAO_SELECT:
 	case BOTAO_DIREITO:
+		alarmeAtual = Enter;
 		if (_botao_select_antes == SOLTO) {
 			if (_parametro_da_vez++ >= PARAM_HI)
 				_parametro_da_vez = 0;
@@ -494,6 +509,7 @@ void shieldLCD() {
 		}
 		break;
 	case BOTAO_ESQUERDA:
+		alarmeAtual = Volta;
 		if (_botao_select_antes == SOLTO) {
 			if (_parametro_da_vez-- <= 0)
 				_parametro_da_vez = PARAM_HI;
@@ -504,9 +520,11 @@ void shieldLCD() {
 		switch (_parametro_da_vez)
 		{
 		case PARAM_PV:
+			alarmeAtual = Inc;
 			modoOperacao = modoOperacao ? TensaoRef : AutoRef;
 			break;
 		case PARAM_SP:
+			alarmeAtual = Inc;
 			if (modoOperacao == TensaoRef)
 			{
 				if (param_Setpoint <= PARAM_VALOR_SP_MAXIMO_TENSAO)
@@ -518,6 +536,7 @@ void shieldLCD() {
 
 			break;
 		case PARAM_HI:
+			alarmeAtual = Inc;
 			if (param_Histerese <= PARAM_VALOR_HI_MAXIMO_TENSAO)
 				param_Histerese = param_Histerese + 0.1;
 			break;
@@ -529,9 +548,11 @@ void shieldLCD() {
 		switch (_parametro_da_vez)
 		{
 		case PARAM_PV:
+			alarmeAtual = Dec;
 			modoOperacao = modoOperacao ? TensaoRef : AutoRef;
 			break;
 		case PARAM_SP:
+			alarmeAtual = Dec;
 			if (modoOperacao == TensaoRef)
 			{
 				if (param_Setpoint > PARAM_VALOR_SP_MINIMO_TENSAO)
@@ -542,6 +563,7 @@ void shieldLCD() {
 					paramTempoEstab = paramTempoEstab - 0.1;
 			break;
 		case PARAM_HI:
+			alarmeAtual = Dec;
 			if (param_Histerese > PARAM_VALOR_HI_MINIMO_TENSAO)
 				param_Histerese = param_Histerese - 0.1;
 			break;
@@ -615,10 +637,10 @@ void shieldLCD() {
  * Verifica se o dados que leu de tensão da fonte estão dentro da
  * faixa préviamente configurada.
  */
-bool verificaDadosDaLeitura(const float valorLido) {
+int verificaDadosDaLeitura(const float valorLido) {
 	if (valorLido >= PARAM_VALOR_MINIMO_TENSAO && valorLido <= PARAM_VALOR_MAXIMO_TENSAO)
-		return true;
-	return false;
+		return Ok;
+	return Erro;
 }
 
 
