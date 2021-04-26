@@ -59,6 +59,12 @@ enum ModoOperacao
 	TensaoRef = 0, AutoRef
 };
 ModoOperacao  modoOperacao = AutoRef;	//modo de operação em referência de tensão ou referência automática
+enum EstadoAutoRef
+{
+	Off, Estabilizacao, Soldagem
+};
+EstadoAutoRef estadoAutoRef = Off;      // Estado da lógica de Auto referência
+long tAbriu = 0;						// Momento em que o arco foi aberto
 
 enum StatusBuzzer
 {
@@ -89,6 +95,7 @@ StatusLeitura  estadoComunicacao = Erro;           //se 1 a comunicacao esta ok,
 
 //     DECLARÇÃO DAS FUNÇÕES
 void leituras(void);
+bool atualizaStatusReferencia();
 void acionamentos(void);
 void ihm(void);
 void alarmeBuzzer();
@@ -139,7 +146,12 @@ void setup()
 void loop()
 {
 	leituras();     //ler
-	acionamentos(); //agir
+	if (atualizaStatusReferencia())
+		acionamentos(); //agir
+	else {                                                                        //Se a compensação não estiver ativa, mantem saídas desligadas
+		digitalWrite(MENOS_PIN, LOW);
+		digitalWrite(MAIS_PIN, LOW);
+	}
 	ihm();          //comunicar
 }
 
@@ -151,25 +163,49 @@ void loop()
  * devem estar aqui;
  *
  */
-int tentativas_sem_sucesso;
+#define PLOT_SERIAL
+//#define DEBUG_SERIAL
 void leituras(void) {
-	if (lerTensao) {                                                              //ler a cada chamada da interrupção com tempo configurado
-		Serial.write(INICIA_COMUNCACAO);                                                  //inicia a comunicação
-		Serial.write(TENSAO_ID);                                                          //faz a requisição da tensão da fonte
+	static int tentativasSemSucesso;
+	static auto lendo = false;
+	if (lerTensao) {		//ler a cada chamada da interrupção com tempo configurado    		
 		lerTensao = 0;                                                                    //aguarda o tempo para a próxima leitura
-		byte_da_vez = 0;                                                                  //prepara a variável para a lógica seguinte
-		if (tentativas_sem_sucesso++ >= 20) {
-			tentativas_sem_sucesso = 20;
+		if (tentativasSemSucesso++ >= 10 || byte_da_vez < 5) {
+			tentativasSemSucesso = 0;
 			estadoComunicacao = Erro;
 			char resetCom[] = { 0xFF,0xFF,0xFF,0xFF };
 			Serial.write(resetCom);
-			Serial2.println("erro");
+#ifdef DEBUG_SERIAL
+			Serial2.println("erro - Reset");
+#endif
+			lendo = false;
+			byte_da_vez = 0;                                                                  //prepara a variável para a lógica seguinte
+		}
+		if (!lendo)
+		{
+			Serial.write(INICIA_COMUNCACAO);                                                  //inicia a comunicação
+			Serial.write(TENSAO_ID);
+			lendo = true;
+			byte_da_vez = 0;                                                                  //prepara a variável para a lógica seguinte
 		}
 	}
-	else if (Serial.available() > 0) {                                           //se receber algo na serial
-		tentativas_sem_sucesso = 0;                                                       //zera alerta de falta de comunicação
-		dados_recebidos_da_fonte[byte_da_vez] = Serial.read();                           //armazena os 4 bytes informados
-		Serial2.println(dados_recebidos_da_fonte[byte_da_vez]);
+	if (Serial.available() > 0) {									//se receber algo na serial
+		tentativasSemSucesso = 0;									//zera alerta de falta de comunicação
+		if (byte_da_vez < 5)
+			dados_recebidos_da_fonte[byte_da_vez] = Serial.read();		//armazena os 4 bytes informados
+#ifdef DEBUG_SERIAL
+		Serial2.print("Dado ");
+		Serial2.print(byte_da_vez);
+		Serial2.print(": ");
+		for (auto i = 0; i < 5; i++)
+		{
+			Serial2.print(dados_recebidos_da_fonte[i]);
+			if (i == 4)
+				Serial2.println(" ");
+			else
+				Serial2.print(" ");
+		}
+#endif
 		switch (byte_da_vez)
 		{
 		case 0:
@@ -180,30 +216,102 @@ void leituras(void) {
 			break;
 		case 1:
 			if (dados_recebidos_da_fonte[1] != TENSAO_ID)
+			{
 				byte_da_vez = 0;
+				Serial.flush();
+			}
 			else
 				byte_da_vez++;
 			break;
 		case 2: //se for o 3º byte
-			byte_recebido_parte1 = dados_recebidos_da_fonte[byte_da_vez];  //salva o 3º byte
+			byte_recebido_parte1 = dados_recebidos_da_fonte[byte_da_vez];	//salva o 3º byte
 			byte_da_vez++;
 			break;
 		case 3: //se for o 4º byte
-			byte_recebido_parte2 = dados_recebidos_da_fonte[byte_da_vez];                          //salva o 4º byte
-			const short temp = byte_recebido_parte1 | byte_recebido_parte2 << 8;
-			tensao_da_fonte = static_cast<float>(temp);// ((byte_recebido_parte1)+(byte_recebido_parte2 * 256));                 //junta o 3º e 4º byte, como 100 e 10 = 100,10
-			tensao_da_fonte = tensao_da_fonte / 10.0;                                                 //aqui tem o valor recebido de tensão da fonte
-			Serial2.println(tensao_da_fonte);                                                   //aqui tem o valor recebido de tensão da fonte
-			estadoComunicacao = verificaDadosDaLeitura(tensao_da_fonte) ? Ok : Erro;   //retorna 1(ok), caso a leitura esteja dentro da faixa pré-estabelecida
+			byte_recebido_parte2 = dados_recebidos_da_fonte[byte_da_vez];	//salva o 4º byte
 			byte_da_vez++;
 			break;
-		default:
-			//	Serial.flush();
-			//	byte_da_vez = 0;
+		case 4: //se for o 5º byte ('O')
+			if (dados_recebidos_da_fonte[byte_da_vez] == 'O')
+			{
+				const short temp = byte_recebido_parte1 | byte_recebido_parte2 << 8;
+				auto tensaoTemp = static_cast<float>(temp);// ((byte_recebido_parte1)+(byte_recebido_parte2 * 256));                 //junta o 3º e 4º byte, como 100 e 10 = 100,10
+				tensaoTemp /= 10.0;                                                 //aqui tem o valor recebido de tensão da fonte
+				estadoComunicacao = verificaDadosDaLeitura(tensaoTemp) ? Ok : Erro;   //retorna 1(ok), caso a leitura esteja dentro da faixa pré-estabelecida
+				if (estadoComunicacao == Ok)
+					tensao_da_fonte = tensaoTemp;
+				else
+					tentativasSemSucesso = 10;
+#ifdef PLOT_SERIAL
+				Serial2.print(param_Setpoint);
+				Serial2.print(" ");
+				Serial2.println(tensao_da_fonte);
+#endif
+#ifdef DEBUG_SERIAL
+				Serial2.print("Atualizado -> ");
+				Serial2.println(tensao_da_fonte);
+#endif
+			}
+			else
+			{
+#ifdef DEBUG_SERIAL
+				Serial2.println("Dado Nok");
+#endif
+				tentativasSemSucesso = 10;
+			}
+			memset(dados_recebidos_da_fonte, 0, 5);
+			lendo = false;
+			byte_da_vez = 0;
 			break;
+		default:;
 		}
 	}
 
+}
+
+
+/*
+ *         ACIONAMENTO
+ *
+ * Função responsável pela atualização da referência
+ * para o modo AutoRef;
+ *
+ */
+bool atualizaStatusReferencia()
+{
+	if (estadoComunicacao == Erro)
+		return false;
+
+	if (modoOperacao == TensaoRef)
+		return true;
+
+	if (tensao_da_fonte < 5 || tensao_da_fonte > 50)
+		estadoAutoRef = Off;
+	switch (estadoAutoRef)
+	{
+	case Off:
+		if (tensao_da_fonte > 7 && tensao_da_fonte < 50)
+		{
+			estadoAutoRef = Estabilizacao;
+			tAbriu = millis();
+		/*	Serial2.print("tAbriu:");
+			Serial2.println(tAbriu);//*/
+		}
+		break;
+	case Estabilizacao:
+		if (millis() > tAbriu + paramTempoEstab * 1000)
+		{
+		//	Serial2.print("Estabilizado!");
+			estadoAutoRef = Soldagem;
+			param_Setpoint = tensao_da_fonte;
+		}
+		break;
+	case Soldagem:
+		return true;
+	default:;
+	}
+
+	return false;
 }
 
 
@@ -214,22 +322,16 @@ void leituras(void) {
  * devem estar aqui;
  *
  */
-void acionamentos(void) {
-	if (estadoComunicacao == Ok) {                                                        //a compensação é ativa a cada leitura correta da tensão
-		if (tensao_da_fonte > (param_Setpoint + param_Histerese)) {                 //então verifica se precisa compensar
-			digitalWrite(MENOS_PIN, HIGH);
-			digitalWrite(MAIS_PIN, LOW);
-		}
-		else if (tensao_da_fonte < (param_Setpoint - param_Histerese)) {
-			digitalWrite(MENOS_PIN, LOW);
-			digitalWrite(MAIS_PIN, HIGH);
-		}
-		else {
-			digitalWrite(MENOS_PIN, LOW);
-			digitalWrite(MAIS_PIN, LOW);
-		}
+void acionamentos(void) {                                                      //a compensação é ativa a cada leitura correta da tensão
+	if (tensao_da_fonte > (param_Setpoint + param_Histerese)) {                 //então verifica se precisa compensar
+		digitalWrite(MENOS_PIN, HIGH);
+		digitalWrite(MAIS_PIN, LOW);
 	}
-	else {                                                                        //Se a compensação não estiver ativa, mantem saídas desligadas
+	else if (tensao_da_fonte < (param_Setpoint - param_Histerese)) {
+		digitalWrite(MENOS_PIN, LOW);
+		digitalWrite(MAIS_PIN, HIGH);
+	}
+	else {
 		digitalWrite(MENOS_PIN, LOW);
 		digitalWrite(MAIS_PIN, LOW);
 	}
@@ -278,7 +380,7 @@ int temporaria_1_alertaBuzzer;
 int temporaria_2_alertaBuzzer;
 
 void alarmeBuzzer() {
-	//return;
+	return;
 	switch (alarmeAtual) {
 	case SemAlarme:
 		noTone(BUZZER_PIN);
@@ -293,7 +395,7 @@ void alarmeBuzzer() {
 			alarmeAtual = SemAlarme;
 		break;
 
-	case Dec: 
+	case Dec:
 		if (temporaria_1_alertaBuzzer++ == 1)
 			tone(BUZZER_PIN, 30.8);
 		else if (temporaria_1_alertaBuzzer >= 3)
