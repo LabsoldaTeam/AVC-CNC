@@ -363,7 +363,7 @@ int temporaria_1_alertaBuzzer;
 int temporaria_2_alertaBuzzer;
 
 void alarmeBuzzer() {
-	return;
+	//return;
 	switch (alarmeAtual) {
 	case SemAlarme:
 		noTone(BUZZER_PIN);
