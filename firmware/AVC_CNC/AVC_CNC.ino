@@ -2,8 +2,8 @@
  Name:		AVC_CNC.ino
  Created:	4/13/2021 7:38:23 PM
  Author:	Kalil (Atualização 2021)
-v2.0 - Add Modo Auto Ref, e add novos sons (inc, dec,..)
-TODO v2.1 - Save data eeprom
+v2.0 - Add Modo Auto Ref, update serial, e add novos sons (inc, dec,..)
+v2.1 - Save data eeprom
 */
 
 /*Firmware para compensação da posição
@@ -21,8 +21,14 @@ TODO v2.1 - Save data eeprom
  *
  *
  */
+
+
+#define PLOT_SERIAL
+//#define DEBUG_SERIAL
+
  //         BIBLIOTECAS
 #include <LiquidCrystal.h> 
+#include "EstruturasExtras.h"
 
 
 //     CONFIGURAÇÃO DE PINOS
@@ -39,7 +45,7 @@ LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
 
 
 //     DECLARAÇÃO DAS VARIÁVEIS GLOBAIS
-byte  lerTensao;                    //dispara uma nova leitura da tensão pela interrupção
+bool  lerTensao;                    //dispara uma nova leitura da tensão pela interrupção
 float tensao_da_fonte;              //valor da tensão 
 byte   byte_recebido_parte1;        //os valores recebidos são divididos em dois
 byte   byte_recebido_parte2;        //a segunda parte são os decimais
@@ -51,31 +57,16 @@ int   base_tempo2_buzzer;           //2ª base de tempo para o buzzer
 int   base_tempo1_led;              //base de tempo para o led
 int   base_tempo2_led;              //2ª base de tempo para o led
 int   byte_da_vez;                  //para a lógica de recebimento dos bytes da fonte na função de leitura da tensão
-float param_Histerese = 0.5;        // Valor da histerese em V
-float param_Setpoint = 12;			// Ref em V
-float paramTempoEstab = 3.5;			// Tempo de estabilização em s, para atualização automática da referência
-enum ModoOperacao
-{
-	TensaoRef = 0, AutoRef
-};
-ModoOperacao  modoOperacao = AutoRef;	//modo de operação em referência de tensão ou referência automática
-enum EstadoAutoRef
-{
-	Off, Estabilizacao, Soldagem
-};
+//float param_Histerese = 0.5;        // Valor da histerese em V
+//float param_Setpoint = 12;			// Ref em V
+//float paramTempoEstab = 3.5;			// Tempo de estabilização em s, para atualização automática da referência
+//ModoOperacao  modoOperacao = AutoRef;	//modo de operação em referência de tensão ou referência automática
+
+
+
 EstadoAutoRef estadoAutoRef = Off;      // Estado da lógica de Auto referência
 long tAbriu = 0;						// Momento em que o arco foi aberto
-
-enum StatusBuzzer
-{
-	SemAlarme, Alarme1, Alarme2, Inc, Dec, Enter, Volta
-};
 StatusBuzzer alarmeAtual = SemAlarme;
-
-enum StatusLeitura
-{
-	Erro = 0, Ok
-};
 StatusLeitura  estadoComunicacao = Erro;           //se 1 a comunicacao esta ok, se 0 esta com erro.
 
 
@@ -85,27 +76,21 @@ StatusLeitura  estadoComunicacao = Erro;           //se 1 a comunicacao esta ok,
 #define CORRENTE_ID                48
 #define PARAM_1_SEGUNDO           0xC2F7      // PARA 1 SEGUNDO = 65536-(16MHz/1024/1Hz) = 49911 = 0xC2F7
 #define PARAM_0_1_SEGUNDO         0xF9E6      //0x137F      // PARA 0,1 SEGUNDO = 4991 = 0x137F
-#define PARAM_VALOR_MINIMO_TENSAO 0.1           // 0.1 V é o valor mínimo que a fonte tem que informar.
-#define PARAM_VALOR_MAXIMO_TENSAO 200         // 200 V é o valor máximo de tensão que a fonte vai informar
-#define PARAM_VALOR_SP_MAXIMO_TENSAO  99.9
-#define PARAM_VALOR_SP_MINIMO_TENSAO  0.1
-#define PARAM_VALOR_HI_MAXIMO_TENSAO  9.9
-#define PARAM_VALOR_HI_MINIMO_TENSAO  0.1
 
 
 //     DECLARÇÃO DAS FUNÇÕES
 void leituras(void);
 bool atualizaStatusReferencia();
-void acionamentos(void);
+void acionamentos(bool atua);
 void ihm(void);
 void alarmeBuzzer();
-void alertaLed(int statusAlerta);
-void shieldLCD(void);
-int verificaDadosDaLeitura(float valorLido);
+void alertaLed(StatusLeitura statusAlerta);
+void shieldLcd(void);
+StatusLeitura verificaDadosDaLeitura(float valorLido);
 
 
 //      OUTROS
-//SoftwareSerial Serial2(rxPin, txPin); //configurar comunicação
+//SoftwareSerial Serial(rxPin, txPin); //configurar comunicação
 
 
 void setup()
@@ -126,8 +111,8 @@ void setup()
 
 
 	//configurar comunicação
-	Serial.begin(57600, SERIAL_8E1);
-	Serial2.begin(115200);
+	Serial2.begin(57600, SERIAL_8E1);
+	Serial.begin(115200);
 
 	//Configurar LCD
 	lcd.begin(16, 2);                    //SETA A QUANTIDADE DE COLUNAS(16) E O NÚMERO DE LINHAS(2) DO DISPLAY. EM SUMA: UMA MATRIZ DE 16 COLUNAS E 2 LINHAS
@@ -140,19 +125,15 @@ void setup()
 	TCCR1B |= (1 << CS10) | (1 << CS12);    // configura prescaler para 1024: CS12 = 1 e CS10 = 1
 	TCNT1 = PARAM_0_1_SEGUNDO;          // incia timer com valor para que estouro ocorra em 0,1 segundo
 	TIMSK1 |= (1 << TOIE1);             // habilita a interrupção do TIMER1
-
+	loadParametros();
 }
 
 void loop()
 {
 	leituras();     //ler
-	if (atualizaStatusReferencia())
-		acionamentos(); //agir
-	else {                                                                        //Se a compensação não estiver ativa, mantem saídas desligadas
-		digitalWrite(MENOS_PIN, LOW);
-		digitalWrite(MAIS_PIN, LOW);
-	}
+	acionamentos(atualizaStatusReferencia()); //agir
 	ihm();          //comunicar
+	saveParametros(); //verifica alteração de parâmetros a cada 3s, e se for o caso salva parâmetros atualizados
 }
 
 
@@ -163,47 +144,45 @@ void loop()
  * devem estar aqui;
  *
  */
-#define PLOT_SERIAL
-//#define DEBUG_SERIAL
 void leituras(void) {
 	static int tentativasSemSucesso;
 	static auto lendo = false;
 	if (lerTensao) {		//ler a cada chamada da interrupção com tempo configurado    		
-		lerTensao = 0;                                                                    //aguarda o tempo para a próxima leitura
-		if (tentativasSemSucesso++ >= 10 || byte_da_vez < 5) {
+		lerTensao = false;                                                                    //aguarda o tempo para a próxima leitura
+		if (tentativasSemSucesso++ >= 10) {
 			tentativasSemSucesso = 0;
 			estadoComunicacao = Erro;
 			char resetCom[] = { 0xFF,0xFF,0xFF,0xFF };
-			Serial.write(resetCom);
+			Serial2.write(resetCom);
 #ifdef DEBUG_SERIAL
-			Serial2.println("erro - Reset");
+			Serial.println("erro - Reset");
 #endif
 			lendo = false;
 			byte_da_vez = 0;                                                                  //prepara a variável para a lógica seguinte
 		}
 		if (!lendo)
 		{
-			Serial.write(INICIA_COMUNCACAO);                                                  //inicia a comunicação
-			Serial.write(TENSAO_ID);
+			Serial2.write(INICIA_COMUNCACAO);                                                  //inicia a comunicação
+			Serial2.write(TENSAO_ID);
 			lendo = true;
 			byte_da_vez = 0;                                                                  //prepara a variável para a lógica seguinte
 		}
 	}
-	if (Serial.available() > 0) {									//se receber algo na serial
+	if (Serial2.available() > 0) {									//se receber algo na serial
 		tentativasSemSucesso = 0;									//zera alerta de falta de comunicação
 		if (byte_da_vez < 5)
-			dados_recebidos_da_fonte[byte_da_vez] = Serial.read();		//armazena os 4 bytes informados
+			dados_recebidos_da_fonte[byte_da_vez] = Serial2.read();		//armazena os 4 bytes informados
 #ifdef DEBUG_SERIAL
-		Serial2.print("Dado ");
-		Serial2.print(byte_da_vez);
-		Serial2.print(": ");
+		Serial.print("Dado ");
+		Serial.print(byte_da_vez);
+		Serial.print(": ");
 		for (auto i = 0; i < 5; i++)
 		{
-			Serial2.print(dados_recebidos_da_fonte[i]);
+			Serial.print(dados_recebidos_da_fonte[i]);
 			if (i == 4)
-				Serial2.println(" ");
+				Serial.println(" ");
 			else
-				Serial2.print(" ");
+				Serial.print(" ");
 		}
 #endif
 		switch (byte_da_vez)
@@ -216,10 +195,7 @@ void leituras(void) {
 			break;
 		case 1:
 			if (dados_recebidos_da_fonte[1] != TENSAO_ID)
-			{
 				byte_da_vez = 0;
-				Serial.flush();
-			}
 			else
 				byte_da_vez++;
 			break;
@@ -243,19 +219,20 @@ void leituras(void) {
 				else
 					tentativasSemSucesso = 10;
 #ifdef PLOT_SERIAL
-				Serial2.print(param_Setpoint);
-				Serial2.print(" ");
-				Serial2.println(tensao_da_fonte);
+				Serial.print("SetPoint:");
+				Serial.print(paramsAvc.setpoint);
+				Serial.print(" Tensao:");
+				Serial.println(tensao_da_fonte);
 #endif
 #ifdef DEBUG_SERIAL
-				Serial2.print("Atualizado -> ");
-				Serial2.println(tensao_da_fonte);
+				Serial.print("Atualizado -> ");
+				Serial.println(tensao_da_fonte);
 #endif
 			}
 			else
 			{
 #ifdef DEBUG_SERIAL
-				Serial2.println("Dado Nok");
+				Serial.println("Dado Nok");
 #endif
 				tentativasSemSucesso = 10;
 			}
@@ -282,11 +259,12 @@ bool atualizaStatusReferencia()
 	if (estadoComunicacao == Erro)
 		return false;
 
-	if (modoOperacao == TensaoRef)
+	if (paramsAvc.modoOperacao == TensaoRef)
 		return true;
 
 	if (tensao_da_fonte < 5 || tensao_da_fonte > 50)
 		estadoAutoRef = Off;
+
 	switch (estadoAutoRef)
 	{
 	case Off:
@@ -294,23 +272,22 @@ bool atualizaStatusReferencia()
 		{
 			estadoAutoRef = Estabilizacao;
 			tAbriu = millis();
-		/*	Serial2.print("tAbriu:");
-			Serial2.println(tAbriu);//*/
+			/*	Serial.print("tAbriu:");
+				Serial.println(tAbriu);//*/
 		}
 		break;
 	case Estabilizacao:
-		if (millis() > tAbriu + paramTempoEstab * 1000)
+		if (millis() > tAbriu + paramsAvc.tempoEstab * 1000)
 		{
-		//	Serial2.print("Estabilizado!");
+			//	Serial.print("Estabilizado!");
 			estadoAutoRef = Soldagem;
-			param_Setpoint = tensao_da_fonte;
+			paramsAvc.setpoint = tensao_da_fonte;
 		}
 		break;
 	case Soldagem:
 		return true;
 	default:;
 	}
-
 	return false;
 }
 
@@ -322,14 +299,21 @@ bool atualizaStatusReferencia()
  * devem estar aqui;
  *
  */
-void acionamentos(void) {                                                      //a compensação é ativa a cada leitura correta da tensão
-	if (tensao_da_fonte > (param_Setpoint + param_Histerese)) {                 //então verifica se precisa compensar
-		digitalWrite(MENOS_PIN, HIGH);
-		digitalWrite(MAIS_PIN, LOW);
-	}
-	else if (tensao_da_fonte < (param_Setpoint - param_Histerese)) {
-		digitalWrite(MENOS_PIN, LOW);
-		digitalWrite(MAIS_PIN, HIGH);
+void acionamentos(const bool atua) {                                                      //a compensação é ativa a cada leitura correta da tensão
+	if (atua)
+	{
+		if (tensao_da_fonte > (paramsAvc.setpoint + paramsAvc.histerese)) {                 //então verifica se precisa compensar
+			digitalWrite(MENOS_PIN, HIGH);
+			digitalWrite(MAIS_PIN, LOW);
+		}
+		else if (tensao_da_fonte < (paramsAvc.setpoint - paramsAvc.histerese)) {
+			digitalWrite(MENOS_PIN, LOW);
+			digitalWrite(MAIS_PIN, HIGH);
+		}
+		else {
+			digitalWrite(MENOS_PIN, LOW);
+			digitalWrite(MAIS_PIN, LOW);
+		}
 	}
 	else {
 		digitalWrite(MENOS_PIN, LOW);
@@ -354,8 +338,7 @@ void ihm() {
 	estadoAnt = estadoComunicacao;
 	alarmeBuzzer();
 	alertaLed(estadoComunicacao);
-	shieldLCD();
-
+	shieldLcd();
 }
 
 
@@ -458,7 +441,7 @@ void alarmeBuzzer() {
 #define LED_AMARELO_DESLIGADO     digitalWrite(LEDAMARELO_PIN,LOW)
 #define LED_VERMELHO_DESLIGADO    digitalWrite(LEDVERMELHO_PIN,LOW)
 
-void alertaLed(const int statusAlerta) {
+void alertaLed(const StatusLeitura statusAlerta) {
 	switch (statusAlerta) {
 	case Ok:
 		LED_VERDE_LIGADO;
@@ -599,7 +582,7 @@ bool apagaPisca()
 	return true;
 }
 
-void shieldLCD() {
+void shieldLcd() {
 	switch (checaBotao()) {
 	case BOTAO_SELECT:
 	case BOTAO_DIREITO:
@@ -623,24 +606,24 @@ void shieldLCD() {
 		{
 		case PARAM_PV:
 			alarmeAtual = Inc;
-			modoOperacao = modoOperacao ? TensaoRef : AutoRef;
+			paramsAvc.modoOperacao = paramsAvc.modoOperacao ? TensaoRef : AutoRef;
 			break;
 		case PARAM_SP:
 			alarmeAtual = Inc;
-			if (modoOperacao == TensaoRef)
+			if (paramsAvc.modoOperacao == TensaoRef)
 			{
-				if (param_Setpoint <= PARAM_VALOR_SP_MAXIMO_TENSAO)
-					param_Setpoint = param_Setpoint + 0.1;
+				if (paramsAvc.setpoint <= PARAM_VALOR_SP_MAXIMO_TENSAO)
+					paramsAvc.setpoint = paramsAvc.setpoint + 0.1;
 			}
 			else
-				if (paramTempoEstab <= PARAM_VALOR_SP_MAXIMO_TENSAO)
-					paramTempoEstab = paramTempoEstab + 0.1;
+				if (paramsAvc.tempoEstab <= PARAM_VALOR_SP_MAXIMO_TENSAO)
+					paramsAvc.tempoEstab = paramsAvc.tempoEstab + 0.1;
 
 			break;
 		case PARAM_HI:
 			alarmeAtual = Inc;
-			if (param_Histerese <= PARAM_VALOR_HI_MAXIMO_TENSAO)
-				param_Histerese = param_Histerese + 0.1;
+			if (paramsAvc.histerese <= PARAM_VALOR_HI_MAXIMO_TENSAO)
+				paramsAvc.histerese = paramsAvc.histerese + 0.1;
 			break;
 		default:
 			break;
@@ -651,23 +634,23 @@ void shieldLCD() {
 		{
 		case PARAM_PV:
 			alarmeAtual = Dec;
-			modoOperacao = modoOperacao ? TensaoRef : AutoRef;
+			paramsAvc.modoOperacao = paramsAvc.modoOperacao ? TensaoRef : AutoRef;
 			break;
 		case PARAM_SP:
 			alarmeAtual = Dec;
-			if (modoOperacao == TensaoRef)
+			if (paramsAvc.modoOperacao == TensaoRef)
 			{
-				if (param_Setpoint > PARAM_VALOR_SP_MINIMO_TENSAO)
-					param_Setpoint = param_Setpoint - 0.1;
+				if (paramsAvc.setpoint > PARAM_VALOR_SP_MINIMO_TENSAO)
+					paramsAvc.setpoint = paramsAvc.setpoint - 0.1;
 			}
 			else
-				if (paramTempoEstab > PARAM_VALOR_SP_MINIMO_TENSAO)
-					paramTempoEstab = paramTempoEstab - 0.1;
+				if (paramsAvc.tempoEstab > PARAM_VALOR_SP_MINIMO_TENSAO)
+					paramsAvc.tempoEstab = paramsAvc.tempoEstab - 0.1;
 			break;
 		case PARAM_HI:
 			alarmeAtual = Dec;
-			if (param_Histerese > PARAM_VALOR_HI_MINIMO_TENSAO)
-				param_Histerese = param_Histerese - 0.1;
+			if (paramsAvc.histerese > PARAM_VALOR_HI_MINIMO_TENSAO)
+				paramsAvc.histerese = paramsAvc.histerese - 0.1;
 			break;
 		default:
 			break;
@@ -681,7 +664,7 @@ void shieldLCD() {
 
 	lcd.setCursor(0, 0);
 
-	if (modoOperacao == TensaoRef)
+	if (paramsAvc.modoOperacao == TensaoRef)
 	{
 		if (_parametro_da_vez == PARAM_PV && apaga)
 			lcd.print("   ");
@@ -695,8 +678,8 @@ void shieldLCD() {
 		if (_parametro_da_vez == PARAM_SP && apaga)
 			lcd.print("     ");
 		else
-			lcd.print(param_Setpoint, 1);
-		if (param_Setpoint >= 10)
+			lcd.print(paramsAvc.setpoint, 1);
+		if (paramsAvc.setpoint >= 10)
 			lcd.setCursor(8, 1);
 		else
 			lcd.setCursor(7, 1);
@@ -716,8 +699,8 @@ void shieldLCD() {
 		if (_parametro_da_vez == PARAM_SP && apaga)
 			lcd.print("    ");
 		else
-			lcd.print(paramTempoEstab, 1);
-		if (paramTempoEstab >= 10)
+			lcd.print(paramsAvc.tempoEstab, 1);
+		if (paramsAvc.tempoEstab >= 10)
 			lcd.setCursor(9, 1);
 		else
 			lcd.setCursor(8, 1);
@@ -728,7 +711,7 @@ void shieldLCD() {
 	if (_parametro_da_vez == PARAM_HI && apaga)
 		lcd.print("   ");
 	else
-		lcd.print(param_Histerese, 1);
+		lcd.print(paramsAvc.histerese, 1);
 	lcd.print("V");
 }
 
@@ -739,7 +722,7 @@ void shieldLCD() {
  * Verifica se o dados que leu de tensão da fonte estão dentro da
  * faixa préviamente configurada.
  */
-int verificaDadosDaLeitura(const float valorLido) {
+StatusLeitura verificaDadosDaLeitura(const float valorLido) {
 	if (valorLido >= PARAM_VALOR_MINIMO_TENSAO && valorLido <= PARAM_VALOR_MAXIMO_TENSAO)
 		return Ok;
 	return Erro;
@@ -756,7 +739,7 @@ int verificaDadosDaLeitura(const float valorLido) {
 
 ISR(TIMER1_OVF_vect)
 {
-	lerTensao = 1;          //Inicia uma nova leitura da tensão da fonte	
+	lerTensao = true;          //Inicia uma nova leitura da tensão da fonte	
 
 	if (base_tempo1_buzzer)
 		base_tempo1_buzzer--;

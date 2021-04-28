@@ -24,5 +24,8 @@
     <ClInclude Include="__vm\.AVC_CNC.vsarduino.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="EstruturasExtras.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
