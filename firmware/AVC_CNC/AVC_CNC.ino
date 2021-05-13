@@ -24,9 +24,9 @@ v2.1 - Save data eeprom
 
 
 #define PLOT_SERIAL
-//#define DEBUG_SERIAL
+ //#define DEBUG_SERIAL
 
- //         BIBLIOTECAS
+  //         BIBLIOTECAS
 #include <LiquidCrystal.h> 
 #include "EstruturasExtras.h"
 
@@ -63,7 +63,6 @@ int   byte_da_vez;                  //para a lógica de recebimento dos bytes da 
 //ModoOperacao  modoOperacao = AutoRef;	//modo de operação em referência de tensão ou referência automática
 
 
-
 EstadoAutoRef estadoAutoRef = Off;      // Estado da lógica de Auto referência
 long tAbriu = 0;						// Momento em que o arco foi aberto
 StatusBuzzer alarmeAtual = SemAlarme;
@@ -85,6 +84,10 @@ void acionamentos(bool atua);
 void ihm(void);
 void alarmeBuzzer();
 void alertaLed(StatusLeitura statusAlerta);
+int checaBotao();
+bool apagaPisca();
+void menuTensaoRef(bool apaga);
+void menuAutoRef(bool apaga);
 void shieldLcd(void);
 StatusLeitura verificaDadosDaLeitura(float valorLido);
 
@@ -254,21 +257,29 @@ void leituras(void) {
  * para o modo AutoRef;
  *
  */
-bool atualizaStatusReferencia()
+
+bool estadoArcoPrincipal()
 {
 	if (estadoComunicacao == Erro)
+		return false;
+
+
+}
+bool atualizaStatusReferencia()
+{
+	if (!estadoArcoPrincipal())
 		return false;
 
 	if (paramsAvc.modoOperacao == TensaoRef)
 		return true;
 
-	if (tensao_da_fonte < 5 || tensao_da_fonte > 50)
+	if (tensao_da_fonte < 5)// || tensao_da_fonte > 50)
 		estadoAutoRef = Off;
 
 	switch (estadoAutoRef)
 	{
 	case Off:
-		if (tensao_da_fonte > 7 && tensao_da_fonte < 50)
+		if (/*tensao_da_fonte > 7 && */tensao_da_fonte > 45)
 		{
 			estadoAutoRef = Estabilizacao;
 			tAbriu = millis();
@@ -582,6 +593,64 @@ bool apagaPisca()
 	return true;
 }
 
+void menuTensaoRef(const bool apaga)
+{
+	if (_parametro_da_vez == PARAM_PV && apaga)
+		lcd.print("    ");
+	else
+		lcd.print("(A) ");
+	lcd.print("ARCO: ");
+	lcd.print(tensao_da_fonte, 1);
+	lcd.print(" V");
+	lcd.setCursor(0, 1);
+	lcd.print("Ref:");
+	if (_parametro_da_vez == PARAM_SP && apaga)
+		lcd.print("     ");
+	else
+		lcd.print(paramsAvc.setpoint, 1);
+	if (paramsAvc.setpoint >= 10)
+		lcd.setCursor(8, 1);
+	else
+		lcd.setCursor(7, 1);
+	lcd.print("V ");
+	lcd.setCursor(10, 1);
+	lcd.print("+-");
+	if (_parametro_da_vez == PARAM_HI && apaga)
+		lcd.print("   ");
+	else
+		lcd.print(paramsAvc.histerese, 1);
+	lcd.print("V");
+}
+
+void menuAutoRef(const bool apaga)
+{
+	if (_parametro_da_vez == PARAM_PV && apaga)
+		lcd.print("    ");
+	else
+		lcd.print("(B) ");
+	lcd.print("ARCO: ");
+	lcd.print(tensao_da_fonte, 1);
+	lcd.print(" V");
+	lcd.setCursor(0, 1);
+	lcd.print("tEst:");
+	if (_parametro_da_vez == PARAM_SP && apaga)
+		lcd.print("    ");
+	else
+		lcd.print(paramsAvc.tempoEstab, 1);
+	if (paramsAvc.tempoEstab >= 10)
+		lcd.setCursor(9, 1);
+	else
+		lcd.setCursor(8, 1);
+	lcd.print("s ");
+	lcd.setCursor(10, 1);
+	lcd.print("+-");
+	if (_parametro_da_vez == PARAM_HI && apaga)
+		lcd.print("   ");
+	else
+		lcd.print(paramsAvc.histerese, 1);
+	lcd.print("V");
+}
+
 void shieldLcd() {
 	switch (checaBotao()) {
 	case BOTAO_SELECT:
@@ -665,54 +734,9 @@ void shieldLcd() {
 	lcd.setCursor(0, 0);
 
 	if (paramsAvc.modoOperacao == TensaoRef)
-	{
-		if (_parametro_da_vez == PARAM_PV && apaga)
-			lcd.print("   ");
-		else
-			lcd.print("(A)");
-		lcd.print(" ARCO: ");
-		lcd.print(tensao_da_fonte, 1);
-		lcd.print(" V");
-		lcd.setCursor(0, 1);
-		lcd.print("Ref:");
-		if (_parametro_da_vez == PARAM_SP && apaga)
-			lcd.print("     ");
-		else
-			lcd.print(paramsAvc.setpoint, 1);
-		if (paramsAvc.setpoint >= 10)
-			lcd.setCursor(8, 1);
-		else
-			lcd.setCursor(7, 1);
-		lcd.print("V ");
-	}
+		menuTensaoRef(apaga);
 	else
-	{
-		if (_parametro_da_vez == PARAM_PV && apaga)
-			lcd.print("   ");
-		else
-			lcd.print("(B)");
-		lcd.print(" ARCO: ");
-		lcd.print(tensao_da_fonte, 1);
-		lcd.print(" V");
-		lcd.setCursor(0, 1);
-		lcd.print("tEst:");
-		if (_parametro_da_vez == PARAM_SP && apaga)
-			lcd.print("    ");
-		else
-			lcd.print(paramsAvc.tempoEstab, 1);
-		if (paramsAvc.tempoEstab >= 10)
-			lcd.setCursor(9, 1);
-		else
-			lcd.setCursor(8, 1);
-		lcd.print("s ");
-	}
-	lcd.setCursor(10, 1);
-	lcd.print("+-");
-	if (_parametro_da_vez == PARAM_HI && apaga)
-		lcd.print("   ");
-	else
-		lcd.print(paramsAvc.histerese, 1);
-	lcd.print("V");
+		menuAutoRef(apaga);
 }
 
 

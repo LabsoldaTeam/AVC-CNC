@@ -18,10 +18,12 @@ enum StatusLeitura
 	Erro = 0, Ok
 };
 
-#define PARAM_VALOR_MINIMO_TENSAO 0.1           // 0.1 V é o valor mínimo que a fonte tem que informar.
-#define PARAM_VALOR_MAXIMO_TENSAO 200         // 200 V é o valor máximo de tensão que a fonte vai informar
+#define PARAM_VALOR_MINIMO_TENSAO 0.1           // 0.1 V ï¿½ o valor mï¿½nimo que a fonte tem que informar.
+#define PARAM_VALOR_MAXIMO_TENSAO 200         // 200 V ï¿½ o valor mï¿½ximo de tensï¿½o que a fonte vai informar
 #define PARAM_VALOR_SP_MAXIMO_TENSAO  99.9
-#define PARAM_VALOR_SP_MINIMO_TENSAO  0.1
+#define PARAM_VALOR_SP_MINIMO_TENSAO  9.0
+#define PARAM_VALOR_ESTAB_MAXIMO  99.9
+#define PARAM_VALOR_ESTAB_MINIMO  0
 #define PARAM_VALOR_HI_MAXIMO_TENSAO  9.9
 #define PARAM_VALOR_HI_MINIMO_TENSAO  0.1
 
@@ -29,27 +31,26 @@ struct ParamsAvc
 {
 	float histerese,        // Valor da histerese em V
 		setpoint,			// Ref em V
-		tempoEstab;			// Tempo de estabilização em s, para atualização automática da referência
+		tempoEstab;			// Tempo de estabilizaï¿½ï¿½o em s, para atualizaï¿½ï¿½o automï¿½tica da referï¿½ncia
 	ModoOperacao modoOperacao;
 	void checaErros()
 	{
-		if (histerese < PARAM_VALOR_HI_MINIMO_TENSAO || histerese > PARAM_VALOR_HI_MAXIMO_TENSAO)
+		if (histerese < PARAM_VALOR_HI_MINIMO_TENSAO || histerese > PARAM_VALOR_HI_MAXIMO_TENSAO || isnan(histerese))
 			histerese = 0.5;
-		if (setpoint < PARAM_VALOR_SP_MINIMO_TENSAO || setpoint > PARAM_VALOR_SP_MAXIMO_TENSAO)
-			setpoint = 12.5;
-		if (tempoEstab < PARAM_VALOR_SP_MINIMO_TENSAO || tempoEstab > PARAM_VALOR_SP_MAXIMO_TENSAO)
+		if (setpoint < PARAM_VALOR_SP_MINIMO_TENSAO || setpoint > PARAM_VALOR_SP_MAXIMO_TENSAO || isnan(setpoint))
+			setpoint = 22.5;
+		if (tempoEstab < PARAM_VALOR_ESTAB_MINIMO || tempoEstab > PARAM_VALOR_ESTAB_MAXIMO || isnan(tempoEstab))
 			tempoEstab = 3.5;
 	}
 };
 
 ParamsAvc paramsAvc{ 0.5, 12,3.5,AutoRef };
-ParamsAvc paramsAvcAnt = paramsAvc;
-long tSaveUpdate = 0;					// Momento em que foi checada alteração nos parâmetros
+ParamsAvc paramsAvcAnt{ 0.5, 12,3.5,AutoRef };
+long tSaveUpdate = 0;					// Momento em que foi checada alteraï¿½ï¿½o nos parï¿½metros
 
 inline void loadParametros()
 {
 	EEPROM.get(0, paramsAvc);
-
 #ifdef DEBUG_SERIAL
 	Serial.print("paramsAvc.modoOperacao:");
 	Serial.println(paramsAvc.modoOperacao);
@@ -69,10 +70,10 @@ inline void saveParametros()
 		return;
 	if (memcmp(&paramsAvc, &paramsAvcAnt, sizeof(paramsAvc)))
 	{
-#ifdef DEBUG_SERIAL
-		Serial.println("Parametros salvos!");
-#endif
 		EEPROM.put(0, paramsAvc);
+#ifdef DEBUG_SERIAL
+   Serial.println("Parametros salvos!");
+#endif
 	}
 	paramsAvcAnt = paramsAvc;
 	tSaveUpdate = millis();
