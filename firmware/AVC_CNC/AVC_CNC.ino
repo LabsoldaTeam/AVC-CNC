@@ -1,7 +1,7 @@
 /*
  Name:		AVC_CNC.ino
  Created:	4/13/2021 7:38:23 PM
- Author:	Kalil (Atualização 2021)
+ Author:	Felippe Kalil Mendonça (Atualização 2021) e Alex Sandro Pereira (Original - v1.0)
 v2.0 - Add Modo Auto Ref, update serial, e add novos sons (inc, dec,..)
 v2.1 - Save data eeprom
 */
@@ -12,7 +12,8 @@ v2.1 - Save data eeprom
  * Descrição: Este software tem como objetivo receber o valor de
  * tensão da fonte de soldagem e compensar a posição da tocha.
  *
- * Arduíno conecções:
+ * Arduíno conexões:
+ * pin 02 - ON/OFF
  * pin 03 - Buzzer
  * pin 08 - Compensação -
  * pin 09 - Compensação +
@@ -26,12 +27,13 @@ v2.1 - Save data eeprom
 #define PLOT_SERIAL
  //#define DEBUG_SERIAL
 
-  //         BIBLIOTECAS
+//         BIBLIOTECAS
 #include <LiquidCrystal.h> 
 #include "EstruturasExtras.h"
 
 
 //     CONFIGURAÇÃO DE PINOS
+#define ON_OFF_PIN           2 
 #define BUZZER_PIN           3 
 #define MENOS_PIN            47
 #define MAIS_PIN             49
@@ -45,6 +47,7 @@ LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
 
 
 //     DECLARAÇÃO DAS VARIÁVEIS GLOBAIS
+bool ligado;						//sinal correspondente a chave on off
 bool  lerTensao;                    //dispara uma nova leitura da tensão pela interrupção
 float tensao_da_fonte;              //valor da tensão 
 byte   byte_recebido_parte1;        //os valores recebidos são divididos em dois
@@ -57,13 +60,10 @@ int   base_tempo2_buzzer;           //2ª base de tempo para o buzzer
 int   base_tempo1_led;              //base de tempo para o led
 int   base_tempo2_led;              //2ª base de tempo para o led
 int   byte_da_vez;                  //para a lógica de recebimento dos bytes da fonte na função de leitura da tensão
-//float param_Histerese = 0.5;        // Valor da histerese em V
-//float param_Setpoint = 12;			// Ref em V
-//float paramTempoEstab = 3.5;			// Tempo de estabilização em s, para atualização automática da referência
-//ModoOperacao  modoOperacao = AutoRef;	//modo de operação em referência de tensão ou referência automática
 
 
-EstadoAutoRef estadoAutoRef = Off;      // Estado da lógica de Auto referência
+EstadoTensao estadoTensaoOff = Off;      // Estado da lógica de arco aberto
+EstadoTensao estadoAutoRef = Off;      // Estado da lógica de Auto referência
 long tAbriu = 0;						// Momento em que o arco foi aberto
 StatusBuzzer alarmeAtual = SemAlarme;
 StatusLeitura  estadoComunicacao = Erro;           //se 1 a comunicacao esta ok, se 0 esta com erro.
@@ -79,7 +79,11 @@ StatusLeitura  estadoComunicacao = Erro;           //se 1 a comunicacao esta ok,
 
 //     DECLARÇÃO DAS FUNÇÕES
 void leituras(void);
+bool estadoArcoPrincipal();
 bool atualizaStatusReferencia();
+void parar();
+void descer();
+void subir();
 void acionamentos(bool atua);
 void ihm(void);
 void alarmeBuzzer();
@@ -99,6 +103,7 @@ StatusLeitura verificaDadosDaLeitura(float valorLido);
 void setup()
 {
 	//configurar os pinos
+	pinMode(ON_OFF_PIN, INPUT_PULLUP);
 	pinMode(BUZZER_PIN, OUTPUT);
 	pinMode(MENOS_PIN, OUTPUT);
 	pinMode(MAIS_PIN, OUTPUT);
@@ -148,6 +153,8 @@ void loop()
  *
  */
 void leituras(void) {
+	ligado = !digitalRead(ON_OFF_PIN); // Lê a chave ON OFF
+
 	static int tentativasSemSucesso;
 	static auto lendo = false;
 	if (lerTensao) {		//ler a cada chamada da interrupção com tempo configurado    		
@@ -251,10 +258,10 @@ void leituras(void) {
 
 
 /*
- *         ACIONAMENTO
+ *         STATUS TENSÃO
  *
- * Função responsável pela atualização da referência
- * para o modo AutoRef;
+ * Funções responsáveis pela atualização do estado da tensão,
+ * e da referência para o modo AutoRef;
  *
  */
 
@@ -263,34 +270,52 @@ bool estadoArcoPrincipal()
 	if (estadoComunicacao == Erro)
 		return false;
 
+	if (tensao_da_fonte < PARAM_TENSAO_MINIMA_OFF)
+		estadoTensaoOff = Off;
 
+	switch (estadoTensaoOff)
+	{
+	case Off:
+		if (tensao_da_fonte > PARAM_TENSAO_MINIMA_OFF + 2.0)
+		{
+			estadoTensaoOff = Estabilizacao;
+			tAbriu = millis();
+		}
+		break;
+	case Estabilizacao:
+		if (millis() > tAbriu + PARAM_TEMPO_OFF * 1000)
+			estadoTensaoOff = Soldagem;
+		break;
+	case Soldagem:
+		return true;
+	default:;
+	}
+	return false;
 }
+
 bool atualizaStatusReferencia()
 {
-	if (!estadoArcoPrincipal())
+	if (!estadoArcoPrincipal() || !ligado)
 		return false;
 
 	if (paramsAvc.modoOperacao == TensaoRef)
 		return true;
 
-	if (tensao_da_fonte < 5)// || tensao_da_fonte > 50)
+	if (tensao_da_fonte < 5)
 		estadoAutoRef = Off;
 
 	switch (estadoAutoRef)
 	{
 	case Off:
-		if (/*tensao_da_fonte > 7 && */tensao_da_fonte > 45)
+		if (tensao_da_fonte > 20)
 		{
 			estadoAutoRef = Estabilizacao;
 			tAbriu = millis();
-			/*	Serial.print("tAbriu:");
-				Serial.println(tAbriu);//*/
 		}
 		break;
 	case Estabilizacao:
 		if (millis() > tAbriu + paramsAvc.tempoEstab * 1000)
 		{
-			//	Serial.print("Estabilizado!");
 			estadoAutoRef = Soldagem;
 			paramsAvc.setpoint = tensao_da_fonte;
 		}
@@ -306,30 +331,42 @@ bool atualizaStatusReferencia()
 /*
  *         ACIONAMENTO
  *
- * Funções responsáveis por ler grandezas físicas
+ * Funções responsáveis pelas rotinas de controle
  * devem estar aqui;
  *
  */
+
+void parar()
+{
+	digitalWrite(MENOS_PIN, LOW);
+	digitalWrite(MAIS_PIN, LOW);
+}
+
+void descer()
+{
+	digitalWrite(MENOS_PIN, HIGH);
+	digitalWrite(MAIS_PIN, LOW);
+}
+
+void subir()
+{
+	digitalWrite(MENOS_PIN, LOW);
+	digitalWrite(MAIS_PIN, HIGH);
+}
+
+
 void acionamentos(const bool atua) {                                                      //a compensação é ativa a cada leitura correta da tensão
 	if (atua)
 	{
-		if (tensao_da_fonte > (paramsAvc.setpoint + paramsAvc.histerese)) {                 //então verifica se precisa compensar
-			digitalWrite(MENOS_PIN, HIGH);
-			digitalWrite(MAIS_PIN, LOW);
-		}
-		else if (tensao_da_fonte < (paramsAvc.setpoint - paramsAvc.histerese)) {
-			digitalWrite(MENOS_PIN, LOW);
-			digitalWrite(MAIS_PIN, HIGH);
-		}
-		else {
-			digitalWrite(MENOS_PIN, LOW);
-			digitalWrite(MAIS_PIN, LOW);
-		}
+		if (tensao_da_fonte > (paramsAvc.setpoint + paramsAvc.histerese))                  //então verifica se precisa compensar
+			descer();
+		else if (tensao_da_fonte < (paramsAvc.setpoint - paramsAvc.histerese))
+			subir();
+		else
+			parar();
 	}
-	else {
-		digitalWrite(MENOS_PIN, LOW);
-		digitalWrite(MAIS_PIN, LOW);
-	}
+	else
+		parar();
 }
 
 
@@ -486,6 +523,7 @@ void alertaLed(const StatusLeitura statusAlerta) {
  * Controla o LCD 16x2 e os botões que estão na mesma placa
  *
  */
+#define CHAVE_ON_OFF  -1
 #define BOTAO_DIREITO  1
 #define BOTAO_CIMA     2
 #define BOTAO_BAIXO    3
@@ -593,6 +631,15 @@ bool apagaPisca()
 	return true;
 }
 
+void menuDesligado()
+{
+	lcd.print("   DESLIGADO    ");
+	lcd.setCursor(0, 1);
+	lcd.print("  ARCO: ");
+	lcd.print(tensao_da_fonte, 1);
+	lcd.print(" V   ");
+}
+
 void menuTensaoRef(const bool apaga)
 {
 	if (_parametro_da_vez == PARAM_PV && apaga)
@@ -651,92 +698,130 @@ void menuAutoRef(const bool apaga)
 	lcd.print("V");
 }
 
-void shieldLcd() {
-	switch (checaBotao()) {
-	case BOTAO_SELECT:
-	case BOTAO_DIREITO:
-		alarmeAtual = Enter;
-		if (_botao_select_antes == SOLTO) {
-			if (_parametro_da_vez++ >= PARAM_HI)
-				_parametro_da_vez = 0;
-			_botao_select_antes = PRESSIONADO;
-		}
-		break;
-	case BOTAO_ESQUERDA:
-		alarmeAtual = Volta;
-		if (_botao_select_antes == SOLTO) {
-			if (_parametro_da_vez-- <= 0)
-				_parametro_da_vez = PARAM_HI;
-			_botao_select_antes = PRESSIONADO;
-		}
-		break;
-	case BOTAO_CIMA:
-		switch (_parametro_da_vez)
-		{
-		case PARAM_PV:
-			alarmeAtual = Inc;
-			paramsAvc.modoOperacao = paramsAvc.modoOperacao ? TensaoRef : AutoRef;
-			break;
-		case PARAM_SP:
-			alarmeAtual = Inc;
-			if (paramsAvc.modoOperacao == TensaoRef)
-			{
-				if (paramsAvc.setpoint <= PARAM_VALOR_SP_MAXIMO_TENSAO)
-					paramsAvc.setpoint = paramsAvc.setpoint + 0.1;
-			}
-			else
-				if (paramsAvc.tempoEstab <= PARAM_VALOR_SP_MAXIMO_TENSAO)
-					paramsAvc.tempoEstab = paramsAvc.tempoEstab + 0.1;
+void menuManual(const bool apaga)
+{
+	if (_parametro_da_vez == PARAM_PV && apaga)
+		lcd.print("    ");
+	else
+		lcd.print("(C) ");
+	lcd.print("ARCO: ");
+	lcd.print(tensao_da_fonte, 1);
+	lcd.print(" V");
+	lcd.setCursor(0, 1);
+	lcd.print("    MANUAL      ");
+}
 
-			break;
-		case PARAM_HI:
-			alarmeAtual = Inc;
-			if (paramsAvc.histerese <= PARAM_VALOR_HI_MAXIMO_TENSAO)
-				paramsAvc.histerese = paramsAvc.histerese + 0.1;
-			break;
-		default:
-			break;
-		}
-		break;
-	case BOTAO_BAIXO:
-		switch (_parametro_da_vez)
-		{
-		case PARAM_PV:
-			alarmeAtual = Dec;
-			paramsAvc.modoOperacao = paramsAvc.modoOperacao ? TensaoRef : AutoRef;
-			break;
-		case PARAM_SP:
-			alarmeAtual = Dec;
-			if (paramsAvc.modoOperacao == TensaoRef)
-			{
-				if (paramsAvc.setpoint > PARAM_VALOR_SP_MINIMO_TENSAO)
-					paramsAvc.setpoint = paramsAvc.setpoint - 0.1;
+void shieldLcd() {
+	if (ligado)
+		switch (checaBotao()) {
+		case BOTAO_SELECT:
+		case BOTAO_DIREITO:
+			alarmeAtual = Enter;
+			if (_botao_select_antes == SOLTO) {
+				if (_parametro_da_vez++ >= PARAM_HI)
+					_parametro_da_vez = 0;
+				_botao_select_antes = PRESSIONADO;
 			}
-			else
-				if (paramsAvc.tempoEstab > PARAM_VALOR_SP_MINIMO_TENSAO)
-					paramsAvc.tempoEstab = paramsAvc.tempoEstab - 0.1;
 			break;
-		case PARAM_HI:
-			alarmeAtual = Dec;
-			if (paramsAvc.histerese > PARAM_VALOR_HI_MINIMO_TENSAO)
-				paramsAvc.histerese = paramsAvc.histerese - 0.1;
+		case BOTAO_ESQUERDA:
+			alarmeAtual = Volta;
+			if (_botao_select_antes == SOLTO) {
+				if (_parametro_da_vez-- <= 0)
+					_parametro_da_vez = PARAM_HI;
+				_botao_select_antes = PRESSIONADO;
+			}
+			break;
+		case BOTAO_CIMA:
+			if (!ligado)
+				subir();
+			else
+				switch (_parametro_da_vez)
+				{
+				case PARAM_PV:
+					alarmeAtual = Inc;
+					paramsAvc.modoOperacao = paramsAvc.modoOperacao ? TensaoRef : AutoRef;
+					break;
+				case PARAM_SP:
+					alarmeAtual = Inc;
+					if (paramsAvc.modoOperacao == TensaoRef)
+					{
+						if (paramsAvc.setpoint < PARAM_VALOR_SP_MAXIMO_TENSAO)
+							paramsAvc.setpoint = paramsAvc.setpoint + 0.1;
+					}
+					else
+						if (paramsAvc.tempoEstab < PARAM_VALOR_SP_MAXIMO_TENSAO)
+							paramsAvc.tempoEstab = paramsAvc.tempoEstab + 0.1;
+
+					break;
+				case PARAM_HI:
+					alarmeAtual = Inc;
+					if (paramsAvc.histerese < PARAM_VALOR_HI_MAXIMO_TENSAO)
+						paramsAvc.histerese = paramsAvc.histerese + 0.1;
+					break;
+				default:
+					break;
+				}
+			break;
+		case BOTAO_BAIXO:
+			switch (_parametro_da_vez)
+			{
+			case PARAM_PV:
+				alarmeAtual = Dec;
+				paramsAvc.modoOperacao = paramsAvc.modoOperacao ? TensaoRef : AutoRef;
+				break;
+			case PARAM_SP:
+				alarmeAtual = Dec;
+				if (paramsAvc.modoOperacao == TensaoRef)
+				{
+					if (paramsAvc.setpoint > PARAM_VALOR_SP_MINIMO_TENSAO)
+						paramsAvc.setpoint = paramsAvc.setpoint - 0.1;
+				}
+				else
+					if (paramsAvc.tempoEstab > PARAM_VALOR_SP_MINIMO_TENSAO)
+						paramsAvc.tempoEstab = paramsAvc.tempoEstab - 0.1;
+				break;
+			case PARAM_HI:
+				alarmeAtual = Dec;
+				if (paramsAvc.histerese > PARAM_VALOR_HI_MINIMO_TENSAO)
+					paramsAvc.histerese = paramsAvc.histerese - 0.1;
+				break;
+			default:
+				break;
+			}
 			break;
 		default:
 			break;
 		}
-		break;
-	default:
-		break;
-	}
+	else
+		switch (checaBotao()) {
+		case BOTAO_CIMA:
+			subir();
+			break;
+		case BOTAO_BAIXO:
+			descer();
+			break;
+		default:
+			parar();
+			break;
+		}
 
 	const auto apaga = apagaPisca();
 
 	lcd.setCursor(0, 0);
 
-	if (paramsAvc.modoOperacao == TensaoRef)
-		menuTensaoRef(apaga);
+	if (!ligado)
+		menuDesligado();
 	else
-		menuAutoRef(apaga);
+		switch (paramsAvc.modoOperacao)
+		{
+		default:
+		case TensaoRef:
+			menuTensaoRef(apaga);
+			break;
+		case AutoRef:
+			menuAutoRef(apaga);
+			break;
+		}
 }
 
 

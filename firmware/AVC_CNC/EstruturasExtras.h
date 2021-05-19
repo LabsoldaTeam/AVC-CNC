@@ -5,7 +5,7 @@ enum ModoOperacao
 {
 	TensaoRef = 0, AutoRef
 };
-enum EstadoAutoRef
+enum EstadoTensao
 {
 	Off, Estabilizacao, Soldagem
 };
@@ -27,6 +27,10 @@ enum StatusLeitura
 #define PARAM_VALOR_HI_MAXIMO_TENSAO  9.9
 #define PARAM_VALOR_HI_MINIMO_TENSAO  0.1
 
+#define PARAM_TENSAO_MINIMA_OFF 15.0 // que aparece quando o arco está apagado (varia de 2 a 40)
+#define PARAM_TEMPO_OFF 1.0 //tempo que o sistema espera, após uma tensão de OFF
+
+
 struct ParamsAvc
 {
 	float histerese,        // Valor da histerese em V
@@ -41,6 +45,8 @@ struct ParamsAvc
 			setpoint = 22.5;
 		if (tempoEstab < PARAM_VALOR_ESTAB_MINIMO || tempoEstab > PARAM_VALOR_ESTAB_MAXIMO || isnan(tempoEstab))
 			tempoEstab = 3.5;
+		if (modoOperacao < 0 || modoOperacao > 1 || isnan(modoOperacao))
+			modoOperacao = TensaoRef;
 	}
 };
 
@@ -72,9 +78,9 @@ inline void saveParametros()
 	{
 		EEPROM.put(0, paramsAvc);
 #ifdef DEBUG_SERIAL
-   Serial.println("Parametros salvos!");
+		Serial.println("Parametros salvos!");
 #endif
-	}
+}
 	paramsAvcAnt = paramsAvc;
 	tSaveUpdate = millis();
 }
