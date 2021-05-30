@@ -26,6 +26,7 @@ v2.1 - Save data eeprom
 
 #define PLOT_SERIAL
  //#define DEBUG_SERIAL
+//#define TROCA_SERIAL
 
 //         BIBLIOTECAS
 #include <LiquidCrystal.h> 
@@ -119,8 +120,14 @@ void setup()
 
 
 	//configurar comunicação
+#ifdef TROCA_SERIAL
+	Serial.begin(57600, SERIAL_8E1);
+	Serial2.begin(115200);
+#else
 	Serial2.begin(57600, SERIAL_8E1);
 	Serial.begin(115200);
+#endif
+
 
 	//Configurar LCD
 	lcd.begin(16, 2);                    //SETA A QUANTIDADE DE COLUNAS(16) E O NÚMERO DE LINHAS(2) DO DISPLAY. EM SUMA: UMA MATRIZ DE 16 COLUNAS E 2 LINHAS
@@ -162,24 +169,62 @@ void leituras(void) {
 		if (tentativasSemSucesso++ >= 10) {
 			tentativasSemSucesso = 0;
 			estadoComunicacao = Erro;
-			char resetCom[] = { 0xFF,0xFF,0xFF,0xFF };
+			char resetCom[] = { 0xFF,0xFF,0xFF,0xFF,NULL};
+#ifdef TROCA_SERIAL
+			Serial.write(resetCom);
+#ifdef DEBUG_SERIAL
+			Serial2.println("erro - Reset");
+#endif
+#else
 			Serial2.write(resetCom);
 #ifdef DEBUG_SERIAL
 			Serial.println("erro - Reset");
 #endif
+#endif
+
 			lendo = false;
 			byte_da_vez = 0;                                                                  //prepara a variável para a lógica seguinte
 		}
 		if (!lendo)
 		{
+#ifdef TROCA_SERIAL
+			Serial.write(INICIA_COMUNCACAO);                                                  //inicia a comunicação
+			Serial.write(TENSAO_ID);
+#else
 			Serial2.write(INICIA_COMUNCACAO);                                                  //inicia a comunicação
 			Serial2.write(TENSAO_ID);
+#endif
 			lendo = true;
 			byte_da_vez = 0;                                                                  //prepara a variável para a lógica seguinte
 		}
 	}
-	if (Serial2.available() > 0) {									//se receber algo na serial
+
+#ifdef TROCA_SERIAL
+	const auto available = Serial.available();
+#else
+	const auto available = Serial2.available();
+#endif
+
+	if (available > 0) {									//se receber algo na serial
 		tentativasSemSucesso = 0;									//zera alerta de falta de comunicação
+
+#ifdef TROCA_SERIAL
+		if (byte_da_vez < 5)
+			dados_recebidos_da_fonte[byte_da_vez] = Serial.read();		//armazena os 4 bytes informados
+#ifdef DEBUG_SERIAL
+		Serial2.print("Dado ");
+		Serial2.print(byte_da_vez);
+		Serial2.print(": ");
+		for (auto i = 0; i < 5; i++)
+		{
+			Serial2.print(dados_recebidos_da_fonte[i]);
+			if (i == 4)
+				Serial2.println(" ");
+			else
+				Serial2.print(" ");
+		}
+#endif
+#else
 		if (byte_da_vez < 5)
 			dados_recebidos_da_fonte[byte_da_vez] = Serial2.read();		//armazena os 4 bytes informados
 #ifdef DEBUG_SERIAL
@@ -194,6 +239,7 @@ void leituras(void) {
 			else
 				Serial.print(" ");
 		}
+#endif
 #endif
 		switch (byte_da_vez)
 		{
@@ -229,20 +275,36 @@ void leituras(void) {
 				else
 					tentativasSemSucesso = 10;
 #ifdef PLOT_SERIAL
+#ifdef TROCA_SERIAL
+				Serial2.print("SetPoint:");
+				Serial2.print(paramsAvc.setpoint);
+				Serial2.print(" Tensao:");
+				Serial2.println(tensao_da_fonte);
+#else
 				Serial.print("SetPoint:");
 				Serial.print(paramsAvc.setpoint);
 				Serial.print(" Tensao:");
 				Serial.println(tensao_da_fonte);
 #endif
+#endif
 #ifdef DEBUG_SERIAL
+#ifdef TROCA_SERIAL
+				Serial2.print("Atualizado -> ");
+				Serial2.println(tensao_da_fonte);
+#else
 				Serial.print("Atualizado -> ");
 				Serial.println(tensao_da_fonte);
+#endif
 #endif
 			}
 			else
 			{
 #ifdef DEBUG_SERIAL
+#ifdef TROCA_SERIAL
+				Serial2.println("Dado Nok");
+#else
 				Serial.println("Dado Nok");
+#endif
 #endif
 				tentativasSemSucesso = 10;
 			}
