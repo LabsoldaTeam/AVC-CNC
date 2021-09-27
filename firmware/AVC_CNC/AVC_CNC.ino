@@ -76,6 +76,9 @@ StatusLeitura  estadoComunicacao = Erro;           //se 1 a comunicacao esta ok,
 #define CORRENTE_ID                48
 #define PARAM_1_SEGUNDO           0xC2F7      // PARA 1 SEGUNDO = 65536-(16MHz/1024/1Hz) = 49911 = 0xC2F7
 #define PARAM_0_1_SEGUNDO         0xF9E6      //0x137F      // PARA 0,1 SEGUNDO = 4991 = 0x137F
+#define ALPHA_FILTRO_TENSAO		0.5 // Alpha empregado na filtragem do sinal te tensão
+#define T_LOOP_ATUACAO			300 // ms
+#define DURACAO_MAX_CORRECAO	100 // ms
 
 
 //     DECLARÇÃO DAS FUNÇÕES
@@ -169,7 +172,7 @@ void leituras(void) {
 		if (tentativasSemSucesso++ >= 10) {
 			tentativasSemSucesso = 0;
 			estadoComunicacao = Erro;
-			char resetCom[] = { 0xFF,0xFF,0xFF,0xFF,NULL};
+			char resetCom[] = { 0xFF,0xFF,0xFF,0xFF,NULL };
 #ifdef TROCA_SERIAL
 			Serial.write(resetCom);
 #ifdef DEBUG_SERIAL
@@ -271,7 +274,7 @@ void leituras(void) {
 				tensaoTemp /= 10.0;                                                 //aqui tem o valor recebido de tensão da fonte
 				estadoComunicacao = verificaDadosDaLeitura(tensaoTemp) ? Ok : Erro;   //retorna 1(ok), caso a leitura esteja dentro da faixa pré-estabelecida
 				if (estadoComunicacao == Ok)
-					tensao_da_fonte = tensaoTemp;
+					tensao_da_fonte = tensaoTemp * ALPHA_FILTRO_TENSAO + tensao_da_fonte * (1 - ALPHA_FILTRO_TENSAO);
 				else
 					tentativasSemSucesso = 10;
 #ifdef PLOT_SERIAL
@@ -417,13 +420,30 @@ void subir()
 }
 
 
-void acionamentos(const bool atua) {                                                      //a compensação é ativa a cada leitura correta da tensão
+void acionamentos(bool atua) {                                   //a compensação é ativa a cada leitura correta da tensão
+	const auto tAtual = millis();
+	bool cicloCorr = (tAtual % T_LOOP_ATUACAO) == 0;
+	static long tAtuacao = 0;
+	if (tAtual - tAtuacao < DURACAO_MAX_CORRECAO)
+		atua = false;
 	if (atua)
 	{
 		if (tensao_da_fonte > (paramsAvc.setpoint + paramsAvc.histerese))                  //então verifica se precisa compensar
-			descer();
+		{
+			if (cicloCorr)
+			{
+				descer();
+				tAtuacao = tAtual;
+			}
+		}
 		else if (tensao_da_fonte < (paramsAvc.setpoint - paramsAvc.histerese))
-			subir();
+		{
+			if (cicloCorr)
+			{
+				subir();
+				tAtuacao = tAtual;
+			}
+		}
 		else
 			parar();
 	}
@@ -811,7 +831,7 @@ void shieldLcd() {
 							paramsAvc.setpoint = paramsAvc.setpoint + 0.1;
 					}
 					else
-						if (paramsAvc.tempoEstab < PARAM_VALOR_SP_MAXIMO_TENSAO)
+						if (paramsAvc.tempoEstab < PARAM_VALOR_ESTAB_MAXIMO)
 							paramsAvc.tempoEstab = paramsAvc.tempoEstab + 0.1;
 
 					break;
@@ -839,7 +859,7 @@ void shieldLcd() {
 						paramsAvc.setpoint = paramsAvc.setpoint - 0.1;
 				}
 				else
-					if (paramsAvc.tempoEstab > PARAM_VALOR_SP_MINIMO_TENSAO)
+					if (paramsAvc.tempoEstab > PARAM_VALOR_ESTAB_MINIMO)
 						paramsAvc.tempoEstab = paramsAvc.tempoEstab - 0.1;
 				break;
 			case PARAM_HI:

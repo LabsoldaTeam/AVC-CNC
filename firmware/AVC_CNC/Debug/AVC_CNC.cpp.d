@@ -14,4 +14,6 @@ C:\Users\Kalil\AppData\Local\Temp\VMBuilds\AVC_CNC\mega_atmega2560\Debug\AVC_CNC
  C:\Program\ Files\ (x86)\Arduino\libraries\LiquidCrystal\src/LiquidCrystal.h \
  C:\Program\ Files\ (x86)\Arduino\hardware\arduino\avr\cores\arduino/Print.h \
  C:\Users\Kalil\AppData\Local\Temp\VMBuilds\AVC_CNC\mega_atmega2560\Debug\EstruturasExtras.h \
- C:\Program\ Files\ (x86)\Arduino\hardware\arduino\avr\libraries\EEPROM\src/EEPROM.h
+ C:\Program\ Files\ (x86)\Arduino\hardware\arduino\avr\libraries\EEPROM\src/EEPROM.h \
+ c:\program\ files\ (x86)\microsoft\ visual\ studio\2019\enterprise\common7\ide\extensions\cpwzuv43.p51\Micro\ Platforms\default\debuggers\VM_DBG/VM_DBG.h \
+ C:\Program\ Files\ (x86)\Arduino\hardware\arduino\avr\cores\arduino/Arduino.h
