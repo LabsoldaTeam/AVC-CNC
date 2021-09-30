@@ -51,6 +51,7 @@ LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
 bool ligado;						//sinal correspondente a chave on off
 bool  lerTensao;                    //dispara uma nova leitura da tensão pela interrupção
 float tensao_da_fonte;              //valor da tensão 
+float tensao_da_fonte_filtrada;              //valor da tensão 
 byte   byte_recebido_parte1;        //os valores recebidos são divididos em dois
 byte   byte_recebido_parte2;        //a segunda parte são os decimais
 int   dados_recebidos_da_fonte[5];  //recebe os 4 bytes da fonte
@@ -76,7 +77,7 @@ StatusLeitura  estadoComunicacao = Erro;           //se 1 a comunicacao esta ok,
 #define CORRENTE_ID                48
 #define PARAM_1_SEGUNDO           0xC2F7      // PARA 1 SEGUNDO = 65536-(16MHz/1024/1Hz) = 49911 = 0xC2F7
 #define PARAM_0_1_SEGUNDO         0xF9E6      //0x137F      // PARA 0,1 SEGUNDO = 4991 = 0x137F
-#define ALPHA_FILTRO_TENSAO		0.5 // Alpha empregado na filtragem do sinal te tensão
+#define ALPHA_FILTRO_TENSAO		0.2 // Alpha empregado na filtragem do sinal te tensão
 #define T_LOOP_ATUACAO			300 // ms
 #define DURACAO_MAX_CORRECAO	100 // ms
 
@@ -274,7 +275,10 @@ void leituras(void) {
 				tensaoTemp /= 10.0;                                                 //aqui tem o valor recebido de tensão da fonte
 				estadoComunicacao = verificaDadosDaLeitura(tensaoTemp) ? Ok : Erro;   //retorna 1(ok), caso a leitura esteja dentro da faixa pré-estabelecida
 				if (estadoComunicacao == Ok)
-					tensao_da_fonte = tensaoTemp * ALPHA_FILTRO_TENSAO + tensao_da_fonte * (1 - ALPHA_FILTRO_TENSAO);
+				{
+					tensao_da_fonte = tensaoTemp;
+					tensao_da_fonte_filtrada = tensaoTemp * ALPHA_FILTRO_TENSAO + tensao_da_fonte_filtrada * (1 - ALPHA_FILTRO_TENSAO);
+				}
 				else
 					tentativasSemSucesso = 10;
 #ifdef PLOT_SERIAL
@@ -361,10 +365,16 @@ bool estadoArcoPrincipal()
 bool atualizaStatusReferencia()
 {
 	if (!estadoArcoPrincipal() || !ligado)
+	{
+		estadoAutoRef = Off;
 		return false;
+	}
 
 	if (paramsAvc.modoOperacao == TensaoRef)
+	{
+		estadoAutoRef = Off;
 		return true;
+	}
 
 	if (tensao_da_fonte < 5)
 		estadoAutoRef = Off;
@@ -372,17 +382,22 @@ bool atualizaStatusReferencia()
 	switch (estadoAutoRef)
 	{
 	case Off:
-		if (tensao_da_fonte > 20)
+		if (tensao_da_fonte > 20 && tensao_da_fonte < 50)
 		{
 			estadoAutoRef = Estabilizacao;
 			tAbriu = millis();
 		}
 		break;
 	case Estabilizacao:
+		if (tensao_da_fonte > 50)
+		{
+			estadoAutoRef = Off;
+			break;
+		}
 		if (millis() > tAbriu + paramsAvc.tempoEstab * 1000)
 		{
 			estadoAutoRef = Soldagem;
-			paramsAvc.setpoint = tensao_da_fonte;
+			paramsAvc.setpoint = tensao_da_fonte_filtrada;
 		}
 		break;
 	case Soldagem:
@@ -422,30 +437,31 @@ void subir()
 
 void acionamentos(bool atua) {                                   //a compensação é ativa a cada leitura correta da tensão
 	const auto tAtual = millis();
-	bool cicloCorr = (tAtual % T_LOOP_ATUACAO) == 0;
+	static auto tLoop = 0;
+	bool cicloCorr = (tAtual - tLoop) >= T_LOOP_ATUACAO;
+
 	static long tAtuacao = 0;
 	if (tAtual - tAtuacao < DURACAO_MAX_CORRECAO)
-		atua = false;
+		atua = false;//*/
+
 	if (atua)
 	{
-		if (tensao_da_fonte > (paramsAvc.setpoint + paramsAvc.histerese))                  //então verifica se precisa compensar
+		if (cicloCorr)
 		{
-			if (cicloCorr)
+			if (tensao_da_fonte > (paramsAvc.setpoint + paramsAvc.histerese))                  //então verifica se precisa compensar
 			{
 				descer();
 				tAtuacao = tAtual;
 			}
-		}
-		else if (tensao_da_fonte < (paramsAvc.setpoint - paramsAvc.histerese))
-		{
-			if (cicloCorr)
+			else if (tensao_da_fonte < (paramsAvc.setpoint - paramsAvc.histerese))
 			{
 				subir();
 				tAtuacao = tAtual;
 			}
+			else
+				parar();
+			tLoop = tAtual;
 		}
-		else
-			parar();
 	}
 	else
 		parar();
@@ -718,7 +734,7 @@ void menuDesligado()
 	lcd.print("   DESLIGADO    ");
 	lcd.setCursor(0, 1);
 	lcd.print("  ARCO: ");
-	lcd.print(tensao_da_fonte, 1);
+	lcd.print(tensao_da_fonte_filtrada, 1);
 	lcd.print(" V   ");
 }
 
@@ -729,7 +745,7 @@ void menuTensaoRef(const bool apaga)
 	else
 		lcd.print("(A) ");
 	lcd.print("ARCO: ");
-	lcd.print(tensao_da_fonte, 1);
+	lcd.print(tensao_da_fonte_filtrada, 1);
 	lcd.print(" V");
 	lcd.setCursor(0, 1);
 	lcd.print("Ref:");
@@ -758,7 +774,7 @@ void menuAutoRef(const bool apaga)
 	else
 		lcd.print("(B) ");
 	lcd.print("ARCO: ");
-	lcd.print(tensao_da_fonte, 1);
+	lcd.print(tensao_da_fonte_filtrada, 1);
 	lcd.print(" V");
 	lcd.setCursor(0, 1);
 	lcd.print("tEst:");
@@ -787,7 +803,7 @@ void menuManual(const bool apaga)
 	else
 		lcd.print("(C) ");
 	lcd.print("ARCO: ");
-	lcd.print(tensao_da_fonte, 1);
+	lcd.print(tensao_da_fonte_filtrada, 1);
 	lcd.print(" V");
 	lcd.setCursor(0, 1);
 	lcd.print("    MANUAL      ");
@@ -829,10 +845,14 @@ void shieldLcd() {
 					{
 						if (paramsAvc.setpoint < PARAM_VALOR_SP_MAXIMO_TENSAO)
 							paramsAvc.setpoint = paramsAvc.setpoint + 0.1;
+						else
+							paramsAvc.setpoint = PARAM_VALOR_SP_MAXIMO_TENSAO;
 					}
 					else
 						if (paramsAvc.tempoEstab < PARAM_VALOR_ESTAB_MAXIMO)
 							paramsAvc.tempoEstab = paramsAvc.tempoEstab + 0.1;
+						else
+							paramsAvc.tempoEstab = PARAM_VALOR_ESTAB_MAXIMO;
 
 					break;
 				case PARAM_HI:
@@ -857,10 +877,14 @@ void shieldLcd() {
 				{
 					if (paramsAvc.setpoint > PARAM_VALOR_SP_MINIMO_TENSAO)
 						paramsAvc.setpoint = paramsAvc.setpoint - 0.1;
+					else
+						paramsAvc.setpoint = PARAM_VALOR_SP_MINIMO_TENSAO;
 				}
 				else
 					if (paramsAvc.tempoEstab > PARAM_VALOR_ESTAB_MINIMO)
 						paramsAvc.tempoEstab = paramsAvc.tempoEstab - 0.1;
+					else
+						paramsAvc.tempoEstab = PARAM_VALOR_ESTAB_MINIMO;
 				break;
 			case PARAM_HI:
 				alarmeAtual = Dec;
